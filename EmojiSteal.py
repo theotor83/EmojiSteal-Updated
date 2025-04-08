@@ -1,12 +1,17 @@
-from discord import Client
+from discord import Client, Intents
+from discord.errors import HTTPException  # new import for handling HTTP errors
 from rich.console import Console
 from rich.table import Table
 from rich.prompt import IntPrompt, Prompt, Confirm
 from time import sleep
 import sys
+import aiohttp  # Added import for aiohttp
+from PIL import Image  # added import for resizing
+from io import BytesIO  # added import for BytesIO
 
 console = Console()
-client = Client()
+intents = Intents.all()
+client = Client(intents=intents)
 console.clear()
 
 console.print('[bold yellow]___________                  __.__  _________ __                .__  v1.0 ')
@@ -107,18 +112,50 @@ async def on_ready():
 			await exit_code()
 
 		with console.status('[bold green]Stealing emojis...') as status:
-			for emoji in emojis_to_steal:
-				await sink_guild.create_custom_emoji(name=emoji.name, image= await emoji.url.read(), reason='Created using EmojiSteal script.')
-				console.print(f'Emoji created: [bold green]{emoji.name}')
+			async with aiohttp.ClientSession() as session:
+				for emoji in emojis_to_steal:
+					async with session.get(str(emoji.url)) as response:
+						image = await response.read()
+						# Check and downsize image if larger than 262144 bytes (256KB)
+						if len(image) > 262144 and not emoji.animated:
+							im = Image.open(BytesIO(image))
+							while True:
+								buf = BytesIO()
+								im.save(buf, format='PNG')
+								new_image = buf.getvalue()
+								if len(new_image) <= 262144:
+									image = new_image
+									break
+								new_size = (int(im.width * 0.9), int(im.height * 0.9))
+								if new_size[0] < 16 or new_size[1] < 16:  # fallback if too small to reduce further
+									image = new_image
+									break
+								im = im.resize(new_size, Image.LANCZOS)
+							if len(image) > 262144:
+								console.print(f'Failed to resize {emoji.name}, skipping.')
+								continue
+					try:
+						await sink_guild.create_custom_emoji(name=emoji.name, image=image, reason='Created using EmojiSteal script.')
+						console.print(f'Emoji created: [bold green]{emoji.name}')
+					except HTTPException as he:
+						if he.code == 50138:
+							console.print(f'Failed to create {emoji.name} due to size constraints, skipping.')
+							continue
+						else:
+							raise
 
 		console.log(f'[bold green]Completed stealing emojis!')
 		console.print()
 		console.print('[cyan]Thanks for using EmojiSteal script!')
 		console.print('[cyan]Coded by @DarkGuy10 https://github.com/DarkGuy10/')
+		console.print('[cyan]Updated by @theotor83 https://github.com/theotor83/')
 		console.print('[i]Ehe te nanayo![/]')
 		await exit_code()
 	
-	except:
-		pass
+	except Exception as e:
+		console.log(f"[red]ERROR:[/] {e}")
+		import traceback
+		traceback.print_exc()
+		await exit_code()
 
-client.run(token, bot=False)
+client.run(token)
